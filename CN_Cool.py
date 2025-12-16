@@ -20,66 +20,43 @@ def run_cn_cool(dt, nt, l=0.01, ni=100):
     fp = 0.2         # Firing period [s]
     t0 = 0.0         # First firing begins [s]
 
-    # Initial Conditions
-    T = np.full(ni, 300.0)  # Temperature vector for the current time step
-
+    
     # Storage Matrix for Plotting
-    T_history = np.zeros((ni, nt))
-    T_history[:, 0] = T
+    T = np.zeros((ni, nt)) # Temp
+    R = np.zeros((ni,nt)) # Source Terms
+    T[:, 0] = 300
+    
+    L = sp_mat.lil_matrix((ni, ni))
+    I = sp_mat.identity(ni)
 
-    # Precompute constant
-    r = a * dt / (dx * dx)  # Fourier number
-    beta = 2 * hg * dx / kap  # Dimensionless convection parameter
-
-    # Solver Function
-    def heat_solver_cn(T_current, is_firing):
-        # Build matrix A (LHS) and vector b (RHS) for each timestep
-        A = sp_mat.lil_matrix((ni, ni))
-        b = np.zeros(ni)
-
-        # Left boundary (i=0): Convective or Insulated
-        if is_firing:  # Convective boundary
-            # LHS: T_0^{n+1} - r*T_1^{n+1} + (r/2)*(2+β)*T_0^{n+1}
-            A[0, 0] = 1 + (r/2) * (2 + beta)
-            A[0, 1] = -r
-            # RHS: T_0^n + r*T_1^n - (r/2)*(2+β)*T_0^n + r*β*T_g
-            b[0] = (1 - (r/2) * (2 + beta)) * T_current[0] + r * T_current[1] + r * beta * T0g
-        else:  # Insulated boundary (dT/dx = 0)
-            A[0, 0] = 1 + r
-            A[0, 1] = -r
-            b[0] = (1 - r) * T_current[0] + r * T_current[1]
-
-        # Interior nodes (i = 1 to ni-2)
-        for i in range(1, ni - 1):
-            A[i, i-1] = -r/2
-            A[i, i] = 1 + r
-            A[i, i+1] = -r/2
-            b[i] = (r/2) * T_current[i-1] + (1 - r) * T_current[i] + (r/2) * T_current[i+1]
-
-        # Right boundary (i=ni-1): Insulated (dT/dx = 0)
-        A[ni-1, ni-2] = -r
-        A[ni-1, ni-1] = 1 + r
-        b[ni-1] = r * T_current[ni-2] + (1 - r) * T_current[ni-1]
-
-        # Convert to CSC format for efficient solving
-        A = A.tocsc()
-
-        # Solve the sparse linear system A * T_next = b
-        T_next = spsolve(A, b)
-
-        return T_next
-
-    # Main Loop: March Solution Forward in Time
-    for k in range(1, nt+1):
-        t = dt * (k - 1)
-
-        # Determine if the rocket is firing at the current time
+    for k in range(nt-1):
+        t = dt * k
+        # figure out if firing
         firing = (t >= t0) and ((t - t0) // fp < 6) and ((t - t0) % fp < ft)
+        for i in range(ni-1):
+            # Left Boundary
+            if i == 0:
+                if firing:
+                    L[0, 0] = (-2 -((2*dx*hg)/kap))/(dx*dx)
+                    L[0, 1] = 2/(dx*dx)
+                else:
+                    L[0, 0] = -2/(dx*dx)
+                    L[0, 1] = 2/(dx*dx)
+            # Interior Nodes 
+            elif i < ni-1:
+                L[i, i-1] = 1/(dx*dx)
+                L[i, i] = -2/(dx*dx)
+                L[i, i+1] = 1/(dx*dx)
+            # Right Boundary
+            
+            L[ni-1, ni-2] = 2/(dx*dx)
+            L[ni-1, ni-1] = -2/(dx*dx)
+        
+        A = (I - ((a*dt)/2)*L)
+        B = (I + ((a*dt)/2)*L)@T[:,k]
+        if firing:
+            B[0] += ((2*dx*hg*T0g)/(kap*dx*dx))*(a*dt)
 
-        # Get the new solution for the next time step
-        T = heat_solver_cn(T, firing)
+        T[:,k+1] = spsolve(A,B)
 
-        # Store result
-        T_history[:, k-1] = T
-
-    return T_history
+    return T
